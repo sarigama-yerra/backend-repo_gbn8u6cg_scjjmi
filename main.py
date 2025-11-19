@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import Optional
 
-app = FastAPI()
+from schemas import Lead
+from database import create_document
+
+app = FastAPI(title="Kaffeland API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,11 +19,66 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Kaffeland Backend Running"}
 
 @app.get("/api/hello")
 def hello():
     return {"message": "Hello from the backend API!"}
+
+
+class QuoteRequest(BaseModel):
+    employees: Optional[int] = Field(None, ge=1)
+    cups_per_day: int = Field(..., ge=1)
+    price_per_cup: float = Field(0.25, ge=0)
+
+class QuoteResponse(BaseModel):
+    monthly_cups: int
+    monthly_cost: float
+    price_per_cup: float
+    suggested_plan: str
+    summary: str
+
+
+def _suggest_plan(cups_per_day: int) -> str:
+    if cups_per_day < 50:
+        return "Starter (up to 50 cups/day)"
+    if cups_per_day < 150:
+        return "Growth (50–150 cups/day)"
+    if cups_per_day < 400:
+        return "Office Pro (150–400 cups/day)"
+    return "Enterprise (400+ cups/day)"
+
+
+@app.post("/api/quote", response_model=QuoteResponse)
+def get_quote(payload: QuoteRequest):
+    workdays = 22
+    monthly_cups = payload.cups_per_day * workdays
+    monthly_cost = round(monthly_cups * payload.price_per_cup, 2)
+    plan = _suggest_plan(payload.cups_per_day)
+
+    company_size = f" for ~{payload.employees} employees" if payload.employees else ""
+    summary = (
+        f"Estimated {monthly_cups} cups/month{company_size} at ${payload.price_per_cup:.2f} per cup. "
+        f"Suggested plan: {plan}."
+    )
+
+    return QuoteResponse(
+        monthly_cups=monthly_cups,
+        monthly_cost=monthly_cost,
+        price_per_cup=payload.price_per_cup,
+        suggested_plan=plan,
+        summary=summary,
+    )
+
+
+@app.post("/api/leads")
+def create_lead(lead: Lead):
+    try:
+        inserted_id = create_document("lead", lead)
+        return {"status": "ok", "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/test")
 def test_database():
